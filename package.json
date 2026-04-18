@@ -1,0 +1,24 @@
+{
+  "name": "educorrect",
+  "version": "1.0.0",
+  "description": "Assistant pédagogique IA — correction d'exercices scolaires",
+  "private": true,
+  "scripts": {
+    "dev":   "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next":    "14.2.3",
+    "react":   "18.3.1",
+    "react-dom": "18.3.1",
+    "mammoth": "1.8.0"
+  },
+  "devDependencies": {
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

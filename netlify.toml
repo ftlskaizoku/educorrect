@@ -1,0 +1,14 @@
+[build]
+  command   = "npm run build"
+  publish   = ".next"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Variables d'environnement → À configurer dans l'interface Netlify :
+# Settings > Environment variables > Add variable
+# Nom : ANTHROPIC_API_KEY
+# Valeur : sk-ant-api03-...  (ta clé depuis console.anthropic.com)
