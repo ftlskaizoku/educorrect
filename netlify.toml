@@ -1,14 +1,18 @@
 [build]
-  command   = "npm run build"
-  publish   = ".next"
+  command = "npm run build"
+  publish = ".next"
 
 [build.environment]
   NODE_VERSION = "18"
 
+# Augmente le timeout des fonctions serverless à 26s (max plan gratuit)
+# INDISPENSABLE : Claude AI peut prendre 15-25s à répondre
+[functions]
+  timeout = 26
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# Variables d'environnement → À configurer dans l'interface Netlify :
-# Settings > Environment variables > Add variable
-# Nom : ANTHROPIC_API_KEY
-# Valeur : sk-ant-api03-...  (ta clé depuis console.anthropic.com)
+# ── Variables d'environnement (à configurer dans l'UI Netlify) ─────────────────
+# Site > Site configuration > Environment variables > Add variable
+# ANTHROPIC_API_KEY = sk-ant-api03-xxxx  (depuis console.anthropic.com)
