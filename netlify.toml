@@ -5,14 +5,9 @@
 [build.environment]
   NODE_VERSION = "18"
 
-# Augmente le timeout des fonctions serverless à 26s (max plan gratuit)
-# INDISPENSABLE : Claude AI peut prendre 15-25s à répondre
-[functions]
-  timeout = 26
-
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# ── Variables d'environnement (à configurer dans l'UI Netlify) ─────────────────
-# Site > Site configuration > Environment variables > Add variable
-# ANTHROPIC_API_KEY = sk-ant-api03-xxxx  (depuis console.anthropic.com)
+# Timeout par fonction (syntaxe correcte — doit être un objet)
+[functions."api/claude"]
+  timeout = 26
