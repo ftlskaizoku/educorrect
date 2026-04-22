@@ -224,11 +224,11 @@ function AuthScreen({ onSuccess, onBack }) {
         if (f.pw.length<6)            throw new Error("Mot de passe : 6 caractères min.");
         if (f.pw!==f.pw2)             throw new Error("Les mots de passe ne correspondent pas.");
         const u = registerUser({ name:f.name.trim(), email:f.email.trim(), password:f.pw, level:"", series:null });
-        onSuccess(u, !u.isAdmin);
+        onSuccess(u, !u.isAdmin); // admin skips onboarding
       } else {
         if (!f.email||!f.pw) throw new Error("Remplis tous les champs.");
         const u = loginUser({ email:f.email.trim(), password:f.pw });
-        onSuccess(u, !u.isAdmin && !u.level);
+        onSuccess(u, !u.isAdmin && !u.level); // admin always skips onboarding
       }
     } catch(e) { setErr(e.message); } finally { setBusy(false); }
   };
@@ -1083,22 +1083,28 @@ function AdminTab({ adminUser }) {
 // EXERCISES TAB
 // ─────────────────────────────────────────────────────────────────────────────
 function ExercisesTab({ user }) {
-  const [step,   setStep]  = useState("subject");
-  const [subj,   setSubj]  = useState(null);
-  const [topic,  setTopic] = useState("");
-  const [exo,    setExo]   = useState(null);
-  const [corr,   setCorr]  = useState(null);
-  const [diff,   setDiff]  = useState(1);
-  const [busy,   setBusy]  = useState(false);
-  const [err,    setErr]   = useState("");
-  const available = getSubjectsForStudent(user.level||"3ème", user.series);
+  const [step,      setStep]     = useState("subject");
+  const [subj,      setSubj]     = useState(null);
+  const [topic,     setTopic]    = useState("");
+  const [exo,       setExo]      = useState(null);
+  const [corr,      setCorr]     = useState(null);
+  const [diff,      setDiff]     = useState(1);
+  const [busy,      setBusy]     = useState(false);
+  const [err,       setErr]      = useState("");
+  // Admin can switch level to test any class
+  const [adminLvl,  setAdminLvl] = useState(user.isAdmin ? "Terminale" : (user.level||"3ème"));
+  const [adminSer,  setAdminSer] = useState(user.isAdmin ? "S" : (user.series||""));
+
+  const effectiveLevel  = user.isAdmin ? adminLvl  : (user.level||"3ème");
+  const effectiveSeries = user.isAdmin ? adminSer  : (user.series||"");
+  const available = getSubjectsForStudent(effectiveLevel, effectiveSeries);
   const dColor    = DCOL[diff-1];
   const reset     = () => { setStep("subject"); setSubj(null); setTopic(""); setExo(null); setCorr(null); setErr(""); };
 
   const doGen = useCallback(async (lvl,sid,tp,d) => {
     setBusy(true); setErr("");
     try {
-      const serie = user.series ? ` Série ${user.series}` : "";
+      const serie = effectiveSeries ? ` Série ${effectiveSeries}` : "";
       const raw   = await callClaude(
         `Professeur sénégalais. Exercice de ${sid} sur "${tp}" — ${lvl}${serie}, difficulté ${d}/5. Programme MENFP.\n` +
         `JSON UNIQUEMENT sans markdown:\n` +
@@ -1107,12 +1113,12 @@ function ExercisesTab({ user }) {
       );
       setExo(parseJSON(raw)); setStep("exercise");
     } catch(e) { setErr(e.message); } finally { setBusy(false); }
-  },[user]);
+  },[effectiveSeries]);
 
   const doParse = useCallback(async fd => {
     setBusy(true); setErr("");
     const prompt =
-      `Professeur sénégalais. Élève de ${user.level} en ${subj?.id}. Extrais cet exercice.\n` +
+      `Professeur sénégalais. Élève de ${effectiveLevel} en ${subj?.id}. Extrais cet exercice.\n` +
       `JSON UNIQUEMENT sans markdown:\n` +
       `{"title":"...","topic":"...","instructions":"...","questions":[{"id":1,"text":"...","points":5}],"totalPoints":20,"duration":"X min","source":"uploaded"}\n` +
       `Règle: total=20pts.`;
@@ -1124,14 +1130,14 @@ function ExercisesTab({ user }) {
       const p = parseJSON(raw);
       setTopic(p.topic||"exercice uploadé"); setExo({...p, source:"uploaded"}); setStep("exercise");
     } catch(e) { setErr(e.message); } finally { setBusy(false); }
-  },[user, subj]);
+  },[effectiveLevel, subj]);
 
   const doCorr = useCallback(async ans => {
     if (!exo) return;
     setBusy(true); setErr("");
     const qs  = (exo.questions||[]).map(q=>`Q${q.id}(${q.points}pts):${q.text}`).join("|");
     const base =
-      `Professeur sénégalais. Corrige exercice de ${subj?.id}, ${user.level}${user.series?` S.${user.series}`:""}.` +
+      `Professeur sénégalais. Corrige exercice de ${subj?.id}, ${effectiveLevel}${effectiveSeries?` S.${effectiveSeries}`:""}.` +
       `EXERCICE:${exo.title}|${qs}|Total:${exo.totalPoints||20}pts\n{ANS}\n` +
       `JSON UNIQUEMENT:\n{"score":<0-20>,"appreciation":"Excellent|Très bien|Bien|Assez bien|Passable|À améliorer|Insuffisant","feedback":"2 phrases","corrections":[{"questionId":1,"pointsObtenus":<n>,"pointsMax":<n>,"commentaire":"..."}],"fullCorrection":"correction si score≥15 sinon chaîne vide","points_forts":["..."],"points_ameliorer":["..."]}`;
     try {
@@ -1143,7 +1149,7 @@ function ExercisesTab({ user }) {
       if (c.score>=15) setDiff(d=>Math.min(d+1,5));
       setCorr(c); setStep("result");
     } catch(e) { setErr(e.message); } finally { setBusy(false); }
-  },[exo, user, subj, topic, diff]);
+  },[exo, effectiveLevel, effectiveSeries, subj, topic, diff, user]);
 
   if (busy) return <Loader/>;
 
@@ -1152,6 +1158,33 @@ function ExercisesTab({ user }) {
     <div className="pg anim">
       <h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:"0 0 4px"}}>✏️ Exercices</h2>
       <p style={{color:"#6b7280",fontSize:14,margin:"0 0 1.5rem"}}>Quelle matière veux-tu travailler ?</p>
+
+      {/* Admin — sélecteur de classe */}
+      {user.isAdmin && (
+        <div style={{background:"#faf5ff",border:"1px solid #e9d5ff",borderRadius:14,padding:"1rem",marginBottom:16}}>
+          <p style={{margin:"0 0 10px",fontSize:12,fontWeight:700,color:"#7c3aed",textTransform:"uppercase",letterSpacing:".06em"}}>🛡 Admin — Classe simulée</p>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+            {LEVELS.map(l=>(
+              <button key={l.id} onClick={()=>{setAdminLvl(l.id);setAdminSer("");setSubj(null);}}
+                style={{padding:".35rem .75rem",minHeight:36,borderRadius:8,border:`2px solid ${adminLvl===l.id?"#7c3aed":"#e9d5ff"}`,background:adminLvl===l.id?"#f5f3ff":"white",color:adminLvl===l.id?"#7c3aed":"#374151",fontWeight:adminLvl===l.id?700:400,cursor:"pointer",fontSize:12}}>
+                {l.label}
+              </button>
+            ))}
+          </div>
+          {hasSeriesChoice(adminLvl) && (
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {(SERIES_BY_LEVEL[adminLvl]||[]).map(s=>(
+                <button key={s.id} onClick={()=>setAdminSer(s.id)}
+                  style={{padding:".35rem .75rem",minHeight:36,borderRadius:8,border:`2px solid ${adminSer===s.id?"#7c3aed":"#e9d5ff"}`,background:adminSer===s.id?"#f5f3ff":"white",color:adminSer===s.id?"#7c3aed":"#374151",fontWeight:adminSer===s.id?700:400,cursor:"pointer",fontSize:12}}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <p style={{margin:"8px 0 0",fontSize:11,color:"#9ca3af"}}>Classe active : <strong style={{color:"#7c3aed"}}>{effectiveLevel}{effectiveSeries?` · Série ${effectiveSeries}`:""}</strong></p>
+        </div>
+      )}
+
       <ErrBox msg={err}/>
       <div className="g2">
         {available.map(s=>(
@@ -1170,7 +1203,7 @@ function ExercisesTab({ user }) {
       <BkBtn onClick={()=>setStep("subject")}/>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:"1.5rem"}}>
         <div style={{width:44,height:44,borderRadius:10,background:subj?.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:800,color:subj?.color,flexShrink:0}}>{subj?.sym}</div>
-        <div><h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:0}}>{subj?.label}</h2><p style={{margin:0,fontSize:13,color:"#9ca3af"}}>{user.level}{user.series?` · Série ${user.series}`:""}</p></div>
+        <div><h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:0}}>{subj?.label}</h2><p style={{margin:0,fontSize:13,color:"#9ca3af"}}>{effectiveLevel}{effectiveSeries?` · Série ${effectiveSeries}`:""}</p></div>
       </div>
       <div className="g2" style={{gap:16}}>
         <button onClick={()=>setStep("topic")} style={{padding:"1.5rem",minHeight:170,borderRadius:14,border:"2px solid #e0e7ff",background:"white",cursor:"pointer",textAlign:"left",display:"flex",flexDirection:"column",gap:10}}>
@@ -1189,13 +1222,13 @@ function ExercisesTab({ user }) {
 
   /* Topic */
   if (step==="topic") {
-    const sugg = getTopicsForStudent(subj?.id||"", user.level||"3ème", user.series);
+    const sugg = getTopicsForStudent(subj?.id||"", effectiveLevel, effectiveSeries);
     return (
       <div className="pg anim">
         <BkBtn onClick={()=>setStep("mode")}/>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:"1.25rem"}}>
           <div style={{width:44,height:44,borderRadius:10,background:subj?.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:800,color:subj?.color,flexShrink:0}}>{subj?.sym}</div>
-          <div><h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:0}}>{subj?.label}</h2><p style={{margin:0,fontSize:12,color:"#9ca3af"}}>Programme {user.level}{user.series?` · Série ${user.series}`:""}</p></div>
+          <div><h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:0}}>{subj?.label}</h2><p style={{margin:0,fontSize:12,color:"#9ca3af"}}>Programme {effectiveLevel}{effectiveSeries?` · Série ${effectiveSeries}`:""}</p></div>
         </div>
         <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:"1.25rem"}}>
           {sugg.map(t=>(
@@ -1211,7 +1244,7 @@ function ExercisesTab({ user }) {
             placeholder="Ex: Cinétique chimique…"
             style={{width:"100%",padding:".8rem 1rem",border:`2px solid ${topic?subj?.color||"#4f46e5":"#e5e7eb"}`,borderRadius:8,fontSize:16,WebkitTextSizeAdjust:"100%"}}/>
         </div>
-        <PBtn onClick={()=>topic.trim()&&doGen(user.level,subj?.id,topic.trim(),diff)} disabled={!topic.trim()}>Générer l'exercice ✨</PBtn>
+        <PBtn onClick={()=>topic.trim()&&doGen(effectiveLevel,subj?.id,topic.trim(),diff)} disabled={!topic.trim()}>Générer l'exercice ✨</PBtn>
       </div>
     );
   }
@@ -1225,7 +1258,7 @@ function ExercisesTab({ user }) {
   /* Result */
   if (step==="result" && corr) return (
     <ResultView corr={corr} diff={diff}
-      onNext={()=>{setCorr(null);doGen(user.level,subj?.id,topic,diff);}}
+      onNext={()=>{setCorr(null);doGen(effectiveLevel,subj?.id,topic,diff);}}
       onRetry={()=>{setCorr(null);setStep("exercise");}}
       onNew={reset}/>
   );
@@ -1383,8 +1416,15 @@ export default function App() {
 
   useEffect(() => {
     const u = getCurrentUser();
-    if (u) { setUser(u); setScreen(u.isAdmin||u.level ? "app" : "onboarding"); }
-    else     setScreen("landing");
+    if (u) {
+      setUser(u);
+      // Admin goes straight to app regardless of level
+      // Normal user needs onboarding if level not set
+      const needsOnboard = !u.isAdmin && !u.level;
+      setScreen(needsOnboard ? "onboarding" : "app");
+    } else {
+      setScreen("landing");
+    }
   }, []);
 
   const onAuth   = (u, needOnboard) => { setUser(u); setScreen(needOnboard?"onboarding":"app"); };
