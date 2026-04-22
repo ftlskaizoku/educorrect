@@ -7,7 +7,8 @@ import {
 } from "../lib/curriculum";
 import {
   getCurrentUser, loginUser, registerUser, logoutUser, updateUser,
-  addExerciseResult, getStats, getAllUsersForAdmin, isAdminEmail, getProgress
+  addExerciseResult, getStats, getAllUsersForAdmin, isAdminEmail, getProgress,
+  getBadges, getNewBadges, BADGES
 } from "../lib/store";
 import { RESOURCES } from "../lib/resources";
 
@@ -325,6 +326,7 @@ function Shell({ user, tab, setTab, children }) {
   const nav = [
     { id:"dashboard",  ic:"📊", lb:"Accueil"   },
     { id:"exercises",  ic:"✏️",  lb:"Exercices" },
+    { id:"revision",   ic:"⚡", lb:"Révision"  },
     { id:"tutor",      ic:"💬", lb:"Prof IA"   },
     { id:"resources",  ic:"📚", lb:"Ressources"},
     { id:"profile",    ic:"👤", lb:"Profil"    },
@@ -435,6 +437,43 @@ function DashboardTab({ user, goExercises, goTutor }) {
           </div>
         </div>
       )}
+
+      {/* Badges */}
+      {(() => {
+        const badges = getBadges(user.id);
+        const earned = badges.filter(b=>b.earned);
+        const next   = badges.filter(b=>!b.earned).slice(0,3);
+        if (!earned.length && !st.total) return null;
+        return (
+          <div className="card" style={{marginBottom:16}}>
+            <p style={{margin:"0 0 12px",fontWeight:700,fontSize:14,color:"#1e1b4b"}}>🏅 Badges</p>
+            {earned.length>0 && (
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:next.length?12:0}}>
+                {earned.map(b=>(
+                  <div key={b.id} title={b.desc} style={{display:"flex",alignItems:"center",gap:6,background:"#fffbeb",borderRadius:10,padding:".4rem .75rem",border:"1px solid #fde68a"}}>
+                    <span style={{fontSize:18}}>{b.icon}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:"#92400e"}}>{b.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {next.length>0 && (
+              <div>
+                <p style={{margin:"0 0 6px",fontSize:11,color:"#9ca3af",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em"}}>Prochains badges</p>
+                {next.map(b=>(
+                  <div key={b.id} style={{display:"flex",alignItems:"center",gap:10,padding:".5rem 0",borderBottom:"1px solid #f3f4f6"}}>
+                    <span style={{fontSize:20,opacity:.35}}>{b.icon}</span>
+                    <div>
+                      <p style={{margin:0,fontSize:12,fontWeight:600,color:"#9ca3af"}}>{b.name}</p>
+                      <p style={{margin:0,fontSize:11,color:"#d1d5db"}}>{b.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1082,7 +1121,7 @@ function AdminTab({ adminUser }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // EXERCISES TAB
 // ─────────────────────────────────────────────────────────────────────────────
-function ExercisesTab({ user }) {
+function ExercisesTab({ user, onNewBadges }) {
   const [step,      setStep]     = useState("subject");
   const [subj,      setSubj]     = useState(null);
   const [topic,     setTopic]    = useState("");
@@ -1145,7 +1184,13 @@ function ExercisesTab({ user }) {
       if (ans.type==="image") raw = await callVision(ans.base64, ans.mediaType, base.replace("{ANS}","RÉP:[image]"));
       else                    raw = await callClaude(base.replace("{ANS}",`RÉP:\n${ans.content.slice(0,2000)}`));
       const c = parseJSON(raw);
+      // Snapshot stats avant sauvegarde pour détecter nouveaux badges
+      const statsBefore = getStats(user.id);
+      const prevSubjects = Object.keys(statsBefore.bySubject);
       addExerciseResult(user.id,{subject:subj?.id,subjectLabel:subj?.label,topic,score:c.score,difficulty:diff,source:exo.source||"generated"});
+      // Détecte les nouveaux badges
+      const newB = getNewBadges(user.id, statsBefore.total, statsBefore.best, statsBefore.streak, prevSubjects);
+      if (newB.length) onNewBadges?.(newB);
       if (c.score>=15) setDiff(d=>Math.min(d+1,5));
       setCorr(c); setStep("result");
     } catch(e) { setErr(e.message); } finally { setBusy(false); }
@@ -1400,6 +1445,13 @@ function ResultView({ corr, diff, onNext, onRetry, onNew }) {
           {pass&&diff<5?`Suivant — Niv. ${DIFF[Math.min(diff,4)]} →`:"Nouvel exercice →"}
         </button>
       </div>
+      {/* Share button */}
+      {typeof navigator!=="undefined"&&navigator.share&&(
+        <button onClick={()=>navigator.share({title:"EduCorrect",text:`J'ai obtenu ${corr.score}/20 sur EduCorrect ! 🎓`,url:window.location.href}).catch(()=>{})}
+          style={{width:"100%",padding:".75rem",minHeight:44,background:"none",border:"1px solid #e0e7ff",borderRadius:10,color:"#4f46e5",cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:8}}>
+          📤 Partager mon score
+        </button>
+      )}
       <button onClick={onNew} style={{width:"100%",padding:".75rem",minHeight:44,background:"none",border:"1px solid #e5e7eb",borderRadius:10,color:"#9ca3af",cursor:"pointer",fontSize:13}}>Choisir une autre matière</button>
       <p style={{textAlign:"center",fontSize:12,color:"#9ca3af",margin:"10px 0 0"}}>{pass&&diff<5?"🎯 La difficulté augmentera au prochain exercice.":!pass?"💪 Correction complète à 15/20 !":"🏆 Niveau max !"}</p>
     </div>
@@ -1407,19 +1459,326 @@ function ResultView({ corr, diff, onNext, onRetry, onNew }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BADGE TOAST — notification quand un badge est débloqué
+// ─────────────────────────────────────────────────────────────────────────────
+function BadgeToast({ badges, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 4000); return ()=>clearTimeout(t); }, []);
+  if (!badges?.length) return null;
+  return (
+    <div style={{position:"fixed",bottom:80,left:"50%",transform:"translateX(-50%)",zIndex:999,display:"flex",flexDirection:"column",gap:8,pointerEvents:"none",maxWidth:320,width:"90%"}}>
+      {badges.map((b,i)=>(
+        <div key={b.id} style={{background:"white",borderRadius:14,padding:"1rem 1.25rem",boxShadow:"0 8px 32px rgba(0,0,0,.18)",display:"flex",alignItems:"center",gap:12,animation:"fadeUp .4s ease",animationDelay:`${i*0.15}s`,animationFillMode:"both",opacity:0,border:"2px solid #fbbf24"}}>
+          <span style={{fontSize:28,flexShrink:0}}>{b.icon}</span>
+          <div>
+            <p style={{margin:0,fontSize:12,fontWeight:700,color:"#92400e",textTransform:"uppercase",letterSpacing:".06em"}}>🏅 Badge débloqué !</p>
+            <p style={{margin:0,fontSize:14,fontWeight:800,color:"#1e1b4b"}}>{b.name}</p>
+            <p style={{margin:0,fontSize:12,color:"#6b7280"}}>{b.desc}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RÉVISION TAB — Mode révision rapide (QCM) + Historique
+// ─────────────────────────────────────────────────────────────────────────────
+function RevisionTab({ user }) {
+  const [view,   setView]   = useState("home");   // home | setup | quiz | result | history
+  const [subj,   setSubj]   = useState(null);
+  const [topic,  setTopic]  = useState("");
+  const [quiz,   setQuiz]   = useState(null);     // { questions: [{q, choices, answer, explication}] }
+  const [answers,setAnswers]= useState({});        // {0: "A", 1: "C", ...}
+  const [result, setResult] = useState(null);
+  const [busy,   setBusy]   = useState(false);
+  const [err,    setErr]    = useState("");
+  const [histSel,setHistSel]= useState(null);     // exercice sélectionné dans l'historique
+
+  const available  = getSubjectsForStudent(user.level||"3ème", user.series);
+  const progress   = getProgress(user.id);
+  const history    = progress.exercises || [];
+
+  // Génère le QCM
+  const startQuiz = async () => {
+    if (!subj || !topic.trim()) return;
+    setBusy(true); setErr("");
+    try {
+      const serie  = user.series ? ` Série ${user.series}` : "";
+      const raw    = await callClaude(
+        `Professeur sénégalais. Crée 6 questions de révision QCM sur "${topic}" pour ${user.level}${serie}.\n` +
+        `JSON UNIQUEMENT sans markdown:\n` +
+        `{"questions":[{"q":"Question?","choices":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","explication":"Explication courte de la bonne réponse"}]}\n` +
+        `Règle: 6 questions, 4 choix chacune, 1 seule bonne réponse, adapter au niveau ${user.level}.`
+      );
+      const data = parseJSON(raw);
+      setQuiz(data);
+      setAnswers({});
+      setView("quiz");
+    } catch(e) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
+
+  // Calcule le résultat
+  const submitQuiz = () => {
+    const qs = quiz?.questions || [];
+    let correct = 0;
+    const detail = qs.map((q,i)=>{
+      const isRight = answers[i]?.charAt(0) === q.answer.charAt(0);
+      if (isRight) correct++;
+      return { ...q, userAnswer: answers[i]||"—", correct: isRight };
+    });
+    const score = Math.round((correct/qs.length)*20);
+    setResult({ correct, total:qs.length, score, detail });
+    setView("result");
+  };
+
+  const reset = () => { setView("home"); setSubj(null); setTopic(""); setQuiz(null); setAnswers({}); setResult(null); setErr(""); };
+
+  if (busy) return <Loader/>;
+
+  // ── HOME ──────────────────────────────────────────────────────────────────
+  if (view==="home") return (
+    <div className="pg anim">
+      <h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:"0 0 4px"}}>📖 Révision</h2>
+      <p style={{color:"#6b7280",fontSize:14,margin:"0 0 1.5rem"}}>Mode révision rapide et historique de tes exercices</p>
+
+      <div className="g2" style={{marginBottom:16,gap:14}}>
+        <button onClick={()=>setView("setup")} style={{padding:"1.5rem",background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"white",border:"none",borderRadius:16,cursor:"pointer",textAlign:"left",display:"flex",flexDirection:"column",gap:8,boxShadow:"0 4px 16px rgba(79,70,229,.3)"}}>
+          <span style={{fontSize:32}}>⚡</span>
+          <div>
+            <p style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Révision rapide</p>
+            <p style={{margin:0,fontSize:12,opacity:.85,lineHeight:1.5}}>6 questions QCM chronométrées sur le thème de ton choix</p>
+          </div>
+        </button>
+        <button onClick={()=>setView("history")} style={{padding:"1.5rem",background:"white",border:"2px solid #e0e7ff",borderRadius:16,cursor:"pointer",textAlign:"left",display:"flex",flexDirection:"column",gap:8}}>
+          <span style={{fontSize:32}}>🕐</span>
+          <div>
+            <p style={{margin:"0 0 4px",fontSize:15,fontWeight:800,color:"#1e1b4b"}}>Historique</p>
+            <p style={{margin:0,fontSize:12,color:"#6b7280",lineHeight:1.5}}>{history.length} exercice{history.length!==1?"s":""} réalisé{history.length!==1?"s":""}</p>
+          </div>
+        </button>
+      </div>
+
+      {/* Dernières révisions */}
+      {history.length>0 && (
+        <div className="card">
+          <p style={{margin:"0 0 12px",fontWeight:700,fontSize:14,color:"#1e1b4b"}}>Activité récente</p>
+          {history.slice(0,5).map((e,i)=>{
+            const c=e.score>=15?"#10b981":e.score>=10?"#f59e0b":"#ef4444";
+            return (
+              <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:".625rem 0",borderBottom:i<4?"1px solid #f3f4f6":"none",cursor:"pointer"}} onClick={()=>{setHistSel(e);setView("history");}}>
+                <div style={{width:36,height:36,borderRadius:10,background:`${c}15`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <span style={{fontSize:14,fontWeight:800,color:c}}>{e.score}</span>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{margin:0,fontSize:13,fontWeight:600,color:"#1f2937",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.topic||"—"}</p>
+                  <p style={{margin:0,fontSize:11,color:"#9ca3af"}}>{e.subjectLabel} · {new Date(e.date).toLocaleDateString("fr-FR")}</p>
+                </div>
+                <span style={{fontSize:11,fontWeight:700,color:c}}>{e.score}/20</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  // ── SETUP ────────────────────────────────────────────────────────────────
+  if (view==="setup") return (
+    <div className="pg anim">
+      <BkBtn onClick={()=>setView("home")}/>
+      <h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:"0 0 4px"}}>⚡ Révision rapide</h2>
+      <p style={{color:"#6b7280",fontSize:14,margin:"0 0 1.5rem"}}>6 questions QCM · corrigé immédiat</p>
+      <div className="card" style={{marginBottom:14}}>
+        <Lbl>Matière</Lbl>
+        <div className="g2">
+          {available.map(s=>(
+            <button key={s.id} onClick={()=>setSubj(s)} style={{padding:".875rem",borderRadius:12,border:`2px solid ${subj?.id===s.id?s.color:"#e5e7eb"}`,background:subj?.id===s.id?s.bg:"white",cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:32,height:32,borderRadius:8,background:s.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:s.color,flexShrink:0}}>{s.sym}</div>
+              <span style={{fontWeight:600,fontSize:12,color:subj?.id===s.id?s.color:"#374151"}}>{s.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {subj && (
+        <div className="card anim" style={{marginBottom:14}}>
+          <Lbl>Thème à réviser</Lbl>
+          <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:10}}>
+            {getTopicsForStudent(subj.id, user.level||"3ème", user.series).slice(0,6).map(t=>(
+              <button key={t} onClick={()=>setTopic(t)} style={{padding:".4rem .8rem",borderRadius:20,border:`2px solid ${topic===t?subj.color:"#e5e7eb"}`,background:topic===t?subj.bg:"white",color:topic===t?subj.color:"#374151",fontWeight:topic===t?700:400,cursor:"pointer",fontSize:12}}>{t}</button>
+            ))}
+          </div>
+          <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="Ou entre un thème libre…"
+            style={{width:"100%",padding:".75rem 1rem",border:`2px solid ${topic?subj.color:"#e5e7eb"}`,borderRadius:8,fontSize:15,WebkitTextSizeAdjust:"100%"}}/>
+        </div>
+      )}
+      <ErrBox msg={err}/>
+      <PBtn onClick={startQuiz} disabled={!subj||!topic.trim()} s={{background:subj&&topic?"linear-gradient(135deg,#4f46e5,#7c3aed)":"#e5e7eb"}}>
+        Lancer la révision ⚡
+      </PBtn>
+    </div>
+  );
+
+  // ── QUIZ ──────────────────────────────────────────────────────────────────
+  if (view==="quiz" && quiz) {
+    const qs     = quiz.questions || [];
+    const done   = Object.keys(answers).length;
+    const allDone= done === qs.length;
+    return (
+      <div className="pg anim">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem"}}>
+          <BkBtn onClick={reset} label="✕ Abandonner"/>
+          <span style={{fontSize:13,fontWeight:700,color:"#6b7280"}}>{done}/{qs.length} réponses</span>
+        </div>
+        <div style={{background:"#f3f4f6",borderRadius:99,height:6,marginBottom:"1.5rem",overflow:"hidden"}}>
+          <div style={{width:`${(done/qs.length)*100}%`,height:"100%",background:"linear-gradient(90deg,#4f46e5,#7c3aed)",borderRadius:99,transition:"width .3s ease"}}/>
+        </div>
+        {qs.map((q,i)=>(
+          <div key={i} className="card anim" style={{marginBottom:14}}>
+            <p style={{margin:"0 0 12px",fontWeight:700,fontSize:15,color:"#1e1b4b",lineHeight:1.5}}>
+              <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:24,background:"#4f46e5",color:"white",borderRadius:6,fontSize:12,fontWeight:700,marginRight:8,verticalAlign:"middle"}}>{i+1}</span>
+              {q.q}
+            </p>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {q.choices.map((c,ci)=>{
+                const letter = c.charAt(0);
+                const sel    = answers[i]?.charAt(0) === letter;
+                return (
+                  <button key={ci} onClick={()=>setAnswers(p=>({...p,[i]:c}))}
+                    style={{padding:".75rem 1rem",borderRadius:10,border:`2px solid ${sel?"#4f46e5":"#e5e7eb"}`,background:sel?"#eef2ff":"white",color:sel?"#4f46e5":"#374151",fontWeight:sel?700:400,cursor:"pointer",textAlign:"left",fontSize:14,transition:"all .12s"}}>
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <PBtn onClick={submitQuiz} disabled={!allDone} s={{background:allDone?"linear-gradient(135deg,#059669,#10b981)":"#e5e7eb",boxShadow:allDone?"0 4px 14px rgba(16,185,129,.32)":"none"}}>
+          Voir les résultats {allDone?`(${done}/${qs.length})`:""}
+        </PBtn>
+      </div>
+    );
+  }
+
+  // ── RESULT ────────────────────────────────────────────────────────────────
+  if (view==="result" && result) {
+    const sColor = result.score>=15?"#10b981":result.score>=10?"#f59e0b":"#ef4444";
+    return (
+      <div className="pg anim">
+        <div style={{background:result.score>=15?"#ecfdf5":result.score>=10?"#fffbeb":"#fef2f2",border:`2px solid ${result.score>=15?"#6ee7b7":result.score>=10?"#fcd34d":"#fca5a5"}`,borderRadius:16,padding:"1.5rem",marginBottom:14,textAlign:"center"}}>
+          <div style={{fontSize:"clamp(42px,10vw,56px)",fontWeight:900,color:sColor,lineHeight:1,marginBottom:4}}>
+            {result.score}<span style={{fontSize:24,fontWeight:400,color:"#9ca3af"}}>/20</span>
+          </div>
+          <p style={{margin:"0 0 4px",fontSize:16,fontWeight:700,color:"#374151"}}>{result.correct}/{result.total} bonnes réponses</p>
+          <p style={{margin:0,fontSize:14,color:"#6b7280"}}>{result.score>=15?"Excellent travail ! 🏆":result.score>=10?"Bien, continue ! 💪":"Révise encore ce thème 📚"}</p>
+        </div>
+
+        {result.detail.map((q,i)=>(
+          <div key={i} className="card anim" style={{marginBottom:10,borderLeft:`4px solid ${q.correct?"#10b981":"#ef4444"}`}}>
+            <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}}>
+              <span style={{fontSize:16,flexShrink:0}}>{q.correct?"✅":"❌"}</span>
+              <p style={{margin:0,fontSize:13,fontWeight:600,color:"#1e1b4b",lineHeight:1.5,flex:1}}>{q.q}</p>
+            </div>
+            {!q.correct && (
+              <p style={{margin:"0 0 4px",fontSize:12,color:"#ef4444",fontWeight:600}}>
+                Ta réponse : {q.userAnswer}
+              </p>
+            )}
+            <p style={{margin:0,fontSize:12,color:"#059669",fontWeight:600}}>✓ Bonne réponse : {q.answer}</p>
+            <p style={{margin:"4px 0 0",fontSize:12,color:"#6b7280",lineHeight:1.55}}>{q.explication}</p>
+          </div>
+        ))}
+
+        <div className="row" style={{marginTop:4}}>
+          <button onClick={()=>setView("setup")} style={{flex:1,padding:"1rem",minHeight:50,border:"2px solid #e0e7ff",borderRadius:12,background:"white",color:"#4f46e5",fontWeight:700,cursor:"pointer",fontSize:14}}>
+            🔄 Nouveau quiz
+          </button>
+          <button onClick={reset} style={{flex:1,padding:"1rem",minHeight:50,border:"none",borderRadius:12,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"white",fontWeight:700,cursor:"pointer",fontSize:14}}>
+            Accueil
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── HISTORY ───────────────────────────────────────────────────────────────
+  if (view==="history") {
+    if (histSel) return (
+      <div className="pg anim">
+        <BkBtn onClick={()=>setHistSel(null)} label="← Historique"/>
+        <div className="card" style={{marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <h2 style={{fontSize:17,fontWeight:800,color:"#1e1b4b",margin:0}}>{histSel.topic||"Exercice"}</h2>
+            <span style={{fontSize:22,fontWeight:900,color:histSel.score>=15?"#10b981":histSel.score>=10?"#f59e0b":"#ef4444"}}>{histSel.score}/20</span>
+          </div>
+          <p style={{margin:0,fontSize:13,color:"#9ca3af"}}>{histSel.subjectLabel} · {new Date(histSel.date).toLocaleDateString("fr-FR",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p>
+          <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+            <Pill bg="#eef2ff" color="#4f46e5">{histSel.subjectLabel}</Pill>
+            <Pill bg={`${histSel.score>=15?"#10b981":histSel.score>=10?"#f59e0b":"#ef4444"}18`} color={histSel.score>=15?"#10b981":histSel.score>=10?"#d97706":"#dc2626"}>
+              {histSel.score>=15?"Réussi ✓":histSel.score>=10?"Passable":"À retravailler"}
+            </Pill>
+            {histSel.source==="uploaded" && <Pill bg="#fef3c7" color="#92400e">Exercice classe</Pill>}
+          </div>
+        </div>
+        <div style={{background:"#fffbeb",borderRadius:12,padding:"1rem",border:"1px solid #fde68a"}}>
+          <p style={{margin:0,fontSize:13,color:"#92400e",lineHeight:1.6}}>
+            💡 La correction complète n'est disponible que pour les exercices où tu as obtenu ≥ 15/20.
+            {histSel.score<15&&` Il te manquait ${15-histSel.score} point${15-histSel.score>1?"s":""}.`}
+          </p>
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="pg anim">
+        <BkBtn onClick={()=>setView("home")}/>
+        <h2 style={{fontSize:20,fontWeight:800,color:"#1e1b4b",margin:"0 0 4px"}}>🕐 Historique</h2>
+        <p style={{color:"#6b7280",fontSize:14,margin:"0 0 1.5rem"}}>{history.length} exercice{history.length!==1?"s":""} au total</p>
+        {history.length===0 && (
+          <div style={{textAlign:"center",padding:"3rem 1rem"}}>
+            <div style={{fontSize:48,marginBottom:12}}>📝</div>
+            <p style={{color:"#9ca3af",fontSize:14}}>Aucun exercice réalisé pour l'instant.</p>
+          </div>
+        )}
+        {history.map((e,i)=>{
+          const c=e.score>=15?"#10b981":e.score>=10?"#f59e0b":"#ef4444";
+          return (
+            <div key={i} className="card anim" style={{marginBottom:10,cursor:"pointer",display:"flex",alignItems:"center",gap:12}} onClick={()=>setHistSel(e)}>
+              <div style={{width:44,height:44,borderRadius:12,background:`${c}15`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <span style={{fontSize:16,fontWeight:900,color:c}}>{e.score}</span>
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <p style={{margin:0,fontSize:14,fontWeight:700,color:"#1f2937",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.topic||"—"}</p>
+                <p style={{margin:0,fontSize:12,color:"#9ca3af"}}>{e.subjectLabel} · {new Date(e.date).toLocaleDateString("fr-FR")}</p>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <p style={{margin:0,fontSize:13,fontWeight:700,color:c}}>{e.score}/20</p>
+                <p style={{margin:0,fontSize:10,color:"#9ca3af"}}>{DIFF[(e.difficulty||1)-1]}</p>
+              </div>
+              <span style={{color:"#d1d5db",fontSize:16}}>›</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ROOT
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState("loading");
-  const [user,   setUser]   = useState(null);
-  const [tab,    setTab]    = useState("dashboard");
+  const [screen,     setScreen]    = useState("loading");
+  const [user,       setUser]      = useState(null);
+  const [tab,        setTab]       = useState("dashboard");
+  const [newBadges,  setNewBadges] = useState([]);  // badge toast
 
   useEffect(() => {
     const u = getCurrentUser();
     if (u) {
       setUser(u);
-      // Admin goes straight to app regardless of level
-      // Normal user needs onboarding if level not set
       const needsOnboard = !u.isAdmin && !u.level;
       setScreen(needsOnboard ? "onboarding" : "app");
     } else {
@@ -1447,11 +1806,14 @@ export default function App() {
       {screen==="app"        && user && (
         <Shell user={user} tab={tab} setTab={setTab}>
           {tab==="dashboard"  && <DashboardTab  user={user} goExercises={()=>setTab("exercises")} goTutor={()=>setTab("tutor")}/>}
-          {tab==="exercises"  && <ExercisesTab  user={user}/>}
+          {tab==="exercises"  && <ExercisesTab  user={user} onNewBadges={setNewBadges}/>}
+          {tab==="revision"   && <RevisionTab   user={user}/>}
           {tab==="tutor"      && <TutorPage     user={user}/>}
           {tab==="resources"  && <ResourcesTab  user={user}/>}
           {tab==="profile"    && <ProfileTab    user={user} onLogout={onLogout} onUpdate={onUpdate}/>}
           {tab==="admin"      && user.isAdmin && <AdminTab adminUser={user}/>}
+          {/* Badge toast */}
+          {newBadges.length>0 && <BadgeToast badges={newBadges} onClose={()=>setNewBadges([])}/>}
         </Shell>
       )}
     </>
